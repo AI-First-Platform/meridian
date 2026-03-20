@@ -166,6 +166,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
         const body = await c.req.json()
         const model = mapModelToClaudeModel(body.model || "sonnet")
         const stream = body.stream ?? true
+        const workingDirectory = process.env.CLAUDE_PROXY_WORKDIR || process.cwd()
 
         // Session resume: look up cached Claude SDK session
         const opencodeSessionId = c.req.header("x-opencode-session")
@@ -266,6 +267,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
               prompt,
               options: {
                 maxTurns: 100,
+                cwd: workingDirectory,
                 model,
                 pathToClaudeCodeExecutable: claudeExecutable,
                 permissionMode: "bypassPermissions",
@@ -421,6 +423,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}) {
                 prompt,
                 options: {
                   maxTurns: 100,
+                cwd: workingDirectory,
                   model,
                   pathToClaudeCodeExecutable: claudeExecutable,
                   includePartialMessages: true,

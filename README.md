@@ -182,8 +182,18 @@ Sessions are cached for 1 hour and cleaned up automatically.
 |---------------------|---------|-------------|
 | `CLAUDE_PROXY_PORT` | 3456 | Proxy server port |
 | `CLAUDE_PROXY_HOST` | 127.0.0.1 | Proxy server host |
-| `CLAUDE_PROXY_WORKDIR` | (process cwd) | Working directory for MCP file/shell tools |
+| `CLAUDE_PROXY_WORKDIR` | (process cwd) | Working directory for Claude and MCP tools (see below) |
 | `CLAUDE_PROXY_IDLE_TIMEOUT_SECONDS` | 120 | Connection idle timeout |
+
+### Working Directory
+
+By default, the proxy uses the directory it's started from as the working directory. If you run the proxy from a different location than your project, set `CLAUDE_PROXY_WORKDIR`:
+
+```bash
+CLAUDE_PROXY_WORKDIR=/path/to/your/project bun run proxy
+```
+
+This affects both Claude's system prompt (so it knows where your project is) and all MCP tool operations (file reads, writes, bash commands, etc.).
 
 ## Auto-start on macOS
 
@@ -314,16 +324,6 @@ Use the launchd service (see Auto-start section) which automatically restarts th
 
 ```bash
 nohup bun run proxy > /tmp/claude-proxy.log 2>&1 &
-```
-
-### OpenCode shows "0.0.0-claude-max-patches" version
-
-You have an old patched OpenCode binary or shell alias. Check:
-
-```bash
-which opencode          # Should be ~/.opencode/bin/opencode
-alias opencode          # Should not exist
-grep opencode ~/.zshrc  # Remove any alias lines
 ```
 
 ## Architecture
