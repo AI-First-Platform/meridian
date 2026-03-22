@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.12.2...v1.13.0) (2026-03-22)
+
+
+### Features
+
+* add telemetry dashboard with request performance tracking ([def290f](https://github.com/rynfar/opencode-claude-max-proxy/commit/def290f975ed8c1229ecde13d9c1742142ce2e78))
+* add telemetry dashboard with request performance tracking ([79c04a2](https://github.com/rynfar/opencode-claude-max-proxy/commit/79c04a2179690e857c1e8998d4ea1b432d7a3082)), closes [#81](https://github.com/rynfar/opencode-claude-max-proxy/issues/81)
+
 ## [1.12.2](https://github.com/rynfar/opencode-claude-max-proxy/compare/v1.12.1...v1.12.2) (2026-03-22)
 
 
