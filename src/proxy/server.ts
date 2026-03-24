@@ -21,7 +21,7 @@ import { buildAgentDefinitions } from "./agentDefs"
 import { createPassthroughMcpServer, stripMcpPrefix, PASSTHROUGH_MCP_NAME, PASSTHROUGH_MCP_PREFIX } from "./passthroughTools"
 import { lookupSharedSession, storeSharedSession, clearSharedSessions } from "./sessionStore"
 import { LRUMap } from "../utils/lruMap"
-import { telemetryStore, createTelemetryRoutes } from "../telemetry"
+import { telemetryStore, diagnosticLog, createTelemetryRoutes } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
 
 // --- Session Tracking ---
@@ -306,10 +306,9 @@ function verifyLineage(
     suffixOverlap >= MIN_SUFFIX_FOR_COMPACTION &&
     cached.messageHashes.length >= MIN_STORED_FOR_COMPACTION
   ) {
-    console.error(
-      `[PROXY] Compaction detected (key=${cacheKey.slice(0, 8)}…): ` +
-      `suffix overlap ${suffixOverlap}/${cached.messageHashes.length}. Allowing resume.`
-    )
+    const compactionMsg = `Compaction detected (key=${cacheKey.slice(0, 8)}…): suffix overlap ${suffixOverlap}/${cached.messageHashes.length}. Allowing resume.`
+    console.error(`[PROXY] ${compactionMsg}`)
+    diagnosticLog.lineage(compactionMsg)
     cached.lineageHash = computeLineageHash(messages)
     cached.messageHashes = incomingHashes
     cached.messageCount = messages.length
@@ -330,11 +329,9 @@ function verifyLineage(
         }
       }
     }
-    console.error(
-      `[PROXY] Undo detected (key=${cacheKey.slice(0, 8)}…): ` +
-      `prefix overlap ${prefixOverlap}/${cached.messageHashes.length}, ` +
-      `rollback UUID: ${rollbackUuid || "none (legacy session)"}.`
-    )
+    const undoMsg = `Undo detected (key=${cacheKey.slice(0, 8)}…): prefix overlap ${prefixOverlap}/${cached.messageHashes.length}, rollback UUID: ${rollbackUuid || "none (legacy session)"}.`
+    console.error(`[PROXY] ${undoMsg}`)
+    diagnosticLog.lineage(undoMsg)
     // Don't delete the cache entry — we keep the original session for reference.
     // The caller will fork it.
     return { type: "undo", session: cached, prefixOverlap, rollbackUuid }
@@ -748,7 +745,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
         }).join(" → ")
         const lineageType = lineageResult.type === "diverged" && !cachedSession ? "new" : lineageResult.type
         const msgCount = Array.isArray(body.messages) ? body.messages.length : 0
-        console.error(`[PROXY] ${requestMeta.requestId} model=${model} stream=${stream} tools=${body.tools?.length ?? 0} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount} msgs=${msgSummary}`)
+        const requestLogLine = `${requestMeta.requestId} model=${model} stream=${stream} tools=${body.tools?.length ?? 0} lineage=${lineageType} session=${resumeSessionId?.slice(0, 8) || "new"}${isUndo && undoRollbackUuid ? ` rollback=${undoRollbackUuid.slice(0, 8)}` : ""} active=${activeSessions}/${MAX_CONCURRENT_SESSIONS} msgCount=${msgCount}`
+        console.error(`[PROXY] ${requestLogLine} msgs=${msgSummary}`)
+        diagnosticLog.session(`${requestLogLine}`, requestMeta.requestId)
 
         claudeLog("request.received", {
           model,

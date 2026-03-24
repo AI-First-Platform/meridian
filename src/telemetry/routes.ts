@@ -4,10 +4,12 @@
  * GET /telemetry            — HTML dashboard
  * GET /telemetry/requests   — Recent request metrics (JSON)
  * GET /telemetry/summary    — Aggregate statistics (JSON)
+ * GET /telemetry/logs       — Diagnostic logs (JSON)
  */
 
 import { Hono } from "hono"
 import { telemetryStore } from "./store"
+import { diagnosticLog } from "./logStore"
 import { dashboardHtml } from "./dashboard"
 
 export function createTelemetryRoutes() {
@@ -39,6 +41,21 @@ export function createTelemetryRoutes() {
 
     const summary = telemetryStore.summarize(windowMs)
     return c.json(summary)
+  })
+
+  // Diagnostic logs
+  routes.get("/logs", (c) => {
+    const limit = Number.parseInt(c.req.query("limit") || "100", 10)
+    const since = c.req.query("since") ? Number.parseInt(c.req.query("since")!, 10) : undefined
+    const category = c.req.query("category") || undefined
+
+    const logs = diagnosticLog.getRecent({
+      limit: Math.min(limit, 500),
+      since,
+      category,
+    })
+
+    return c.json(logs)
   })
 
   return routes
