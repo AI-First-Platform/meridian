@@ -485,55 +485,91 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             // Wrap SDK call with transparent retry for recoverable errors.
             // Both stale-UUID and rate-limit retries happen inside the generator,
             // so the message-processing loop doesn't need any retry logic.
+            //
+            // Rate-limit retry strategy:
+            //   1. Strip [1m] context (immediate, different model tier)
+            //   2. Backoff retries on base model (1s, 2s — exponential)
+            const MAX_RATE_LIMIT_RETRIES = 2
+            const RATE_LIMIT_BASE_DELAY_MS = 1000
+
             const response = (async function* () {
-              try {
-                yield* query(buildQueryOptions({
-                  prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                  passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
-                  resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
-                }))
-              } catch (error) {
-                const errMsg = error instanceof Error ? error.message : String(error)
+              let rateLimitRetries = 0
 
-                // Retry 1: stale undo UUID — evict session and start fresh
-                if (isStaleSessionError(error)) {
-                  claudeLog("session.stale_uuid_retry", {
-                    mode: "non_stream",
-                    rollbackUuid: undoRollbackUuid,
-                    resumeSessionId,
-                  })
-                  console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
-                  evictSession(opencodeSessionId, workingDirectory, allMessages)
-                  sdkUuidMap.length = 0
-                  for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
-                  yield* query(buildQueryOptions({
-                    prompt: buildFreshPrompt(allMessages, stripCacheControl),
-                    model, workingDirectory, systemContext, claudeExecutable,
-                    passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
-                    resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
-                  }))
-                  return
-                }
-
-                // Retry 2: rate-limited on [1m] — fall back to base model
-                if (hasExtendedContext(model) && isRateLimitError(errMsg)) {
-                  model = stripExtendedContext(model)
-                  claudeLog("upstream.context_fallback", {
-                    mode: "non_stream",
-                    from: model,
-                    to: model,
-                    reason: "rate_limit",
-                  })
-                  console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
-                  yield* query(buildQueryOptions({
+              while (true) {
+                // Track whether response content was yielded.
+                // The SDK emits metadata (session_id etc.) before the API call;
+                // only "assistant" messages represent actual response content.
+                let didYieldContent = false
+                try {
+                  for await (const event of query(buildQueryOptions({
                     prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
                     passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
                     resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
-                  }))
+                  }))) {
+                    if ((event as any).type === "assistant") {
+                      didYieldContent = true
+                    }
+                    yield event
+                  }
                   return
-                }
+                } catch (error) {
+                  const errMsg = error instanceof Error ? error.message : String(error)
 
-                throw error
+                  // Never retry after response content was yielded — response is committed
+                  if (didYieldContent) throw error
+
+                  // Retry: stale undo UUID — evict session and start fresh (one-shot)
+                  if (isStaleSessionError(error)) {
+                    claudeLog("session.stale_uuid_retry", {
+                      mode: "non_stream",
+                      rollbackUuid: undoRollbackUuid,
+                      resumeSessionId,
+                    })
+                    console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
+                    evictSession(opencodeSessionId, workingDirectory, allMessages)
+                    sdkUuidMap.length = 0
+                    for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
+                    yield* query(buildQueryOptions({
+                      prompt: buildFreshPrompt(allMessages, stripCacheControl),
+                      model, workingDirectory, systemContext, claudeExecutable,
+                      passthrough, stream: false, sdkAgents, passthroughMcp, cleanEnv,
+                      resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
+                    }))
+                    return
+                  }
+
+                  // Rate-limit retry: first strip [1m] (free, different tier), then backoff
+                  if (isRateLimitError(errMsg)) {
+                    if (hasExtendedContext(model)) {
+                      const from = model
+                      model = stripExtendedContext(model)
+                      claudeLog("upstream.context_fallback", {
+                        mode: "non_stream",
+                        from,
+                        to: model,
+                        reason: "rate_limit",
+                      })
+                      console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
+                      continue
+                    }
+                    if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+                      rateLimitRetries++
+                      const delay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, rateLimitRetries - 1)
+                      claudeLog("upstream.rate_limit_backoff", {
+                        mode: "non_stream",
+                        model,
+                        attempt: rateLimitRetries,
+                        maxAttempts: MAX_RATE_LIMIT_RETRIES,
+                        delayMs: delay,
+                      })
+                      console.error(`[PROXY] ${requestMeta.requestId} rate-limited on ${model}, retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} in ${delay}ms`)
+                      await new Promise(r => setTimeout(r, delay))
+                      continue
+                    }
+                  }
+
+                  throw error
+                }
               }
             })()
 
@@ -714,54 +750,92 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
 
             try {
               let currentSessionId: string | undefined
-              // Same transparent retry wrapper as the non-streaming path
+              // Same transparent retry wrapper as the non-streaming path.
+              // Rate-limit retry strategy:
+              //   1. Strip [1m] context (immediate, different model tier)
+              //   2. Backoff retries on base model (1s, 2s — exponential)
+              const MAX_RATE_LIMIT_RETRIES = 2
+              const RATE_LIMIT_BASE_DELAY_MS = 1000
+
               const response = (async function* () {
-                try {
-                  yield* query(buildQueryOptions({
-                    prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
-                    passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
-                    resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
-                  }))
-                } catch (error) {
-                  const errMsg = error instanceof Error ? error.message : String(error)
+                let rateLimitRetries = 0
 
-                  if (isStaleSessionError(error)) {
-                    claudeLog("session.stale_uuid_retry", {
-                      mode: "stream",
-                      rollbackUuid: undoRollbackUuid,
-                      resumeSessionId,
-                    })
-                    console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
-                    evictSession(opencodeSessionId, workingDirectory, allMessages)
-                    sdkUuidMap.length = 0
-                    for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
-                    yield* query(buildQueryOptions({
-                      prompt: buildFreshPrompt(allMessages, stripCacheControl),
-                      model, workingDirectory, systemContext, claudeExecutable,
-                      passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
-                      resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
-                    }))
-                    return
-                  }
-
-                  if (hasExtendedContext(model) && isRateLimitError(errMsg)) {
-                    model = stripExtendedContext(model)
-                    claudeLog("upstream.context_fallback", {
-                      mode: "stream",
-                      from: model,
-                      to: model,
-                      reason: "rate_limit",
-                    })
-                    console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
-                    yield* query(buildQueryOptions({
+                while (true) {
+                  // Track whether client-visible SSE events were yielded.
+                  // The SDK emits metadata events (session_id, internal routing)
+                  // before the API call — those are NOT client-visible and must
+                  // not prevent retry. Only stream_event types become SSE output.
+                  let didYieldClientEvent = false
+                  try {
+                    for await (const event of query(buildQueryOptions({
                       prompt: makePrompt(), model, workingDirectory, systemContext, claudeExecutable,
                       passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
                       resumeSessionId, isUndo, undoRollbackUuid, sdkHooks, adapter,
-                    }))
+                    }))) {
+                      if ((event as any).type === "stream_event") {
+                        didYieldClientEvent = true
+                      }
+                      yield event
+                    }
                     return
-                  }
+                  } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error)
 
-                  throw error
+                    // Never retry after client-visible SSE events — response is committed
+                    if (didYieldClientEvent) throw error
+
+                    // Retry: stale undo UUID — evict and start fresh (one-shot)
+                    if (isStaleSessionError(error)) {
+                      claudeLog("session.stale_uuid_retry", {
+                        mode: "stream",
+                        rollbackUuid: undoRollbackUuid,
+                        resumeSessionId,
+                      })
+                      console.error(`[PROXY] Stale session UUID, evicting and retrying as fresh session`)
+                      evictSession(opencodeSessionId, workingDirectory, allMessages)
+                      sdkUuidMap.length = 0
+                      for (let i = 0; i < allMessages.length; i++) sdkUuidMap.push(null)
+                      yield* query(buildQueryOptions({
+                        prompt: buildFreshPrompt(allMessages, stripCacheControl),
+                        model, workingDirectory, systemContext, claudeExecutable,
+                        passthrough, stream: true, sdkAgents, passthroughMcp, cleanEnv,
+                        resumeSessionId: undefined, isUndo: false, undoRollbackUuid: undefined, sdkHooks, adapter,
+                      }))
+                      return
+                    }
+
+                    // Rate-limit retry: first strip [1m] (free, different tier), then backoff
+                    if (isRateLimitError(errMsg)) {
+                      if (hasExtendedContext(model)) {
+                        const from = model
+                        model = stripExtendedContext(model)
+                        claudeLog("upstream.context_fallback", {
+                          mode: "stream",
+                          from,
+                          to: model,
+                          reason: "rate_limit",
+                        })
+                        console.error(`[PROXY] ${requestMeta.requestId} rate-limited on [1m], retrying with ${model}`)
+                        continue
+                      }
+                      if (rateLimitRetries < MAX_RATE_LIMIT_RETRIES) {
+                        rateLimitRetries++
+                        const delay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, rateLimitRetries - 1)
+                        claudeLog("upstream.rate_limit_backoff", {
+                          mode: "stream",
+                          model,
+                          attempt: rateLimitRetries,
+                          maxAttempts: MAX_RATE_LIMIT_RETRIES,
+                          delayMs: delay,
+                        })
+                        console.error(`[PROXY] ${requestMeta.requestId} rate-limited on ${model}, retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES} in ${delay}ms`)
+                        await new Promise(r => setTimeout(r, delay))
+                        continue
+                      }
+                    }
+
+                    throw error
+                  }
                 }
               })()
 

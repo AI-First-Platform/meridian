@@ -19,9 +19,15 @@ export interface ClaudeAuthStatus {
 
 
 const AUTH_STATUS_CACHE_TTL_MS = 60_000
+/** Shorter TTL for failed auth checks — retry sooner to recover */
+const AUTH_STATUS_FAILURE_TTL_MS = 5_000
 
 let cachedAuthStatus: ClaudeAuthStatus | null = null
+/** Last successfully retrieved auth status — survives transient failures
+ *  so model selection doesn't degrade from sonnet[1m] to sonnet. */
+let lastKnownGoodAuthStatus: ClaudeAuthStatus | null = null
 let cachedAuthStatusAt = 0
+let cachedAuthStatusIsFailure = false
 let cachedAuthStatusPromise: Promise<ClaudeAuthStatus | null> | null = null
 
 /**
@@ -67,8 +73,12 @@ export function hasExtendedContext(model: ClaudeModel): boolean {
 }
 
 export async function getClaudeAuthStatusAsync(): Promise<ClaudeAuthStatus | null> {
-  // Return cached result (positive or negative) if within TTL
-  if (cachedAuthStatusAt > 0 && Date.now() - cachedAuthStatusAt < AUTH_STATUS_CACHE_TTL_MS) return cachedAuthStatus
+  // Return cached result if within TTL — use shorter TTL for failures to recover faster
+  const ttl = cachedAuthStatusIsFailure ? AUTH_STATUS_FAILURE_TTL_MS : AUTH_STATUS_CACHE_TTL_MS
+  if (cachedAuthStatusAt > 0 && Date.now() - cachedAuthStatusAt < ttl) {
+    // On failure, return last known good status (preserves subscription type for model selection)
+    return cachedAuthStatus ?? lastKnownGoodAuthStatus
+  }
   if (cachedAuthStatusPromise) return cachedAuthStatusPromise
 
   cachedAuthStatusPromise = (async () => {
@@ -76,13 +86,18 @@ export async function getClaudeAuthStatusAsync(): Promise<ClaudeAuthStatus | nul
       const { stdout } = await exec("claude auth status", { timeout: 5000 })
       const parsed = JSON.parse(stdout) as ClaudeAuthStatus
       cachedAuthStatus = parsed
+      lastKnownGoodAuthStatus = parsed
       cachedAuthStatusAt = Date.now()
+      cachedAuthStatusIsFailure = false
       return parsed
     } catch {
-      // Negative cache: avoid re-exec on every request when command fails
-      cachedAuthStatus = null
+      // Short-lived negative cache: retry in 5s instead of 60s.
+      // Return last known good status so model selection doesn't degrade
+      // (e.g. sonnet[1m] → sonnet) during transient auth command failures.
+      cachedAuthStatusIsFailure = true
       cachedAuthStatusAt = Date.now()
-      return null
+      cachedAuthStatus = null
+      return lastKnownGoodAuthStatus
     }
   })()
 
@@ -153,6 +168,16 @@ export function resetCachedClaudePath(): void {
 /** Reset cached auth status — for testing only */
 export function resetCachedClaudeAuthStatus(): void {
   cachedAuthStatus = null
+  lastKnownGoodAuthStatus = null
+  cachedAuthStatusAt = 0
+  cachedAuthStatusIsFailure = false
+  cachedAuthStatusPromise = null
+}
+
+/** Expire the auth status cache without clearing lastKnownGoodAuthStatus — for testing only.
+ *  This simulates the TTL expiring so the next call re-executes `claude auth status`,
+ *  while preserving the "last known good" fallback state. */
+export function expireAuthStatusCache(): void {
   cachedAuthStatusAt = 0
   cachedAuthStatusPromise = null
 }
