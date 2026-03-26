@@ -102,7 +102,7 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:3456
 
 | Agent | Status | Plugin | Notes |
 |-------|--------|--------|-------|
-| [OpenCode](https://github.com/opencode-ai/opencode) | ✅ Verified | [opencode-meridian](https://github.com/ianjwhite99/opencode-meridian) | Full tool support, session resume, streaming, subagents |
+| [OpenCode](https://github.com/anomalyco/opencode) | ✅ Verified | [opencode-meridian](https://github.com/ianjwhite99/opencode-meridian) | Full tool support, session resume, streaming, subagents |
 | [Crush](https://github.com/charmbracelet/crush) | ✅ Verified | — | Tool execution, multi-turn, headless mode |
 | [Cline](https://github.com/cline/cline) | 🔲 Untested | — | Should work — standard Anthropic API |
 | [Continue](https://github.com/continuedev/continue) | 🔲 Untested | — | Should work — standard Anthropic API |
