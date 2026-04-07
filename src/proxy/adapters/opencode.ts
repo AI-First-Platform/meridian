@@ -45,6 +45,18 @@ export const openCodeAdapter: AgentAdapter = {
     return ALLOWED_MCP_TOOLS
   },
 
+  usesPassthrough(): boolean {
+    const envVal = process.env.MERIDIAN_PASSTHROUGH ?? process.env.CLAUDE_PROXY_PASSTHROUGH
+    if (envVal === "0" || envVal === "false" || envVal === "no") {
+      return false
+    }
+    return true
+  },
+
+  supportsThinking(): boolean {
+    return true
+  },
+
   /**
    * NOTE: OpenCode-specific. Parses the Task tool description to extract
    * subagent names and build SDK AgentDefinition objects for native subagent routing.

@@ -1,7 +1,7 @@
 /**
  * Tests for the OpenCode agent adapter.
  */
-import { describe, it, expect } from "bun:test"
+import { describe, it, expect, beforeEach, afterEach } from "bun:test"
 import { openCodeAdapter } from "../proxy/adapters/opencode"
 
 const SAMPLE_TASK_TOOL = {
@@ -213,10 +213,56 @@ describe("openCodeAdapter.buildSdkHooks", () => {
 })
 
 describe("openCodeAdapter.usesPassthrough", () => {
-  it("is not defined — falls through to CLAUDE_PROXY_PASSTHROUGH env var", () => {
-    // OpenCode defers to the env var so the launchd service PASSTHROUGH=1
-    // setting continues to control passthrough mode for OpenCode requests
-    expect(openCodeAdapter.usesPassthrough).toBeUndefined()
+  const saved: Record<string, string | undefined> = {}
+
+  beforeEach(() => {
+    saved.MERIDIAN_PASSTHROUGH = process.env.MERIDIAN_PASSTHROUGH
+    saved.CLAUDE_PROXY_PASSTHROUGH = process.env.CLAUDE_PROXY_PASSTHROUGH
+    delete process.env.MERIDIAN_PASSTHROUGH
+    delete process.env.CLAUDE_PROXY_PASSTHROUGH
+  })
+
+  afterEach(() => {
+    if (saved.MERIDIAN_PASSTHROUGH !== undefined) process.env.MERIDIAN_PASSTHROUGH = saved.MERIDIAN_PASSTHROUGH
+    else delete process.env.MERIDIAN_PASSTHROUGH
+    if (saved.CLAUDE_PROXY_PASSTHROUGH !== undefined) process.env.CLAUDE_PROXY_PASSTHROUGH = saved.CLAUDE_PROXY_PASSTHROUGH
+    else delete process.env.CLAUDE_PROXY_PASSTHROUGH
+  })
+
+  it("defaults to true (passthrough mode)", () => {
+    expect(openCodeAdapter.usesPassthrough!()).toBe(true)
+  })
+
+  it("returns false when MERIDIAN_PASSTHROUGH=0", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "0"
+    expect(openCodeAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("returns false when MERIDIAN_PASSTHROUGH=false", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "false"
+    expect(openCodeAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("returns true when MERIDIAN_PASSTHROUGH=1", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "1"
+    expect(openCodeAdapter.usesPassthrough!()).toBe(true)
+  })
+
+  it("falls back to CLAUDE_PROXY_PASSTHROUGH", () => {
+    process.env.CLAUDE_PROXY_PASSTHROUGH = "0"
+    expect(openCodeAdapter.usesPassthrough!()).toBe(false)
+  })
+
+  it("MERIDIAN_PASSTHROUGH takes precedence over CLAUDE_PROXY_PASSTHROUGH", () => {
+    process.env.MERIDIAN_PASSTHROUGH = "1"
+    process.env.CLAUDE_PROXY_PASSTHROUGH = "0"
+    expect(openCodeAdapter.usesPassthrough!()).toBe(true)
+  })
+})
+
+describe("openCodeAdapter.supportsThinking", () => {
+  it("returns true — OpenCode renders thinking blocks", () => {
+    expect(openCodeAdapter.supportsThinking!()).toBe(true)
   })
 })
 

@@ -12,7 +12,7 @@ export interface DiagnosticLog {
   /** Log level */
   level: "info" | "warn" | "error"
   /** Log category for filtering */
-  category: "session" | "lineage" | "error" | "lifecycle"
+  category: "session" | "lineage" | "error" | "lifecycle" | "token"
   /** Request ID (if associated with a request) */
   requestId?: string
   /** Human-readable message */

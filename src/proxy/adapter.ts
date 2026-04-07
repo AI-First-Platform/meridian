@@ -98,6 +98,16 @@ export interface AgentAdapter {
   usesPassthrough?(): boolean
 
   /**
+   * Whether this agent's client can render thinking blocks.
+   *
+   * When true, thinking/redacted_thinking blocks are forwarded in
+   * passthrough mode instead of being stripped.
+   * When false or undefined, they are stripped (safe default for
+   * clients that may choke on the encrypted signature field).
+   */
+  supportsThinking?(): boolean
+
+  /**
    * Map a client-side tool_use block to file changes (passthrough mode).
    *
    * In passthrough mode the SDK doesn't execute tools, so PostToolUse

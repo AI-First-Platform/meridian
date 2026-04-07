@@ -29,6 +29,7 @@ import { buildQueryOptions, type QueryContext } from "./query"
 import { resolveProfile, listProfiles, setActiveProfile, getActiveProfileId, getEffectiveProfiles, restoreActiveProfile } from "./profiles"
 import { filterBetasForProfile, getBetaPolicyFromEnv } from "./betas"
 import { createFileChangeHook, extractFileChangesFromMessages, formatFileChangeSummary, type FileChange } from "./fileChanges"
+import { detectTokenAnomalies, formatAnomalyAlerts, type TokenSnapshot } from "./tokenHealth"
 import {
   computeLineageHash,
   hashMessage,
@@ -134,13 +135,82 @@ function buildFreshPrompt(
 
 function logUsage(requestId: string, usage: TokenUsage): void {
   const fmt = (n: number) => n > 1000 ? `${Math.round(n / 1000)}k` : String(n)
+  const cacheRead = usage.cache_read_input_tokens ?? 0
+  const totalInput = usage.input_tokens ?? 0
+  const cacheRate = totalInput > 0 ? Math.round((cacheRead / totalInput) * 100) : 0
+  const cacheTag = totalInput > 0 ? ` cache=${cacheRate}%` : ""
   const parts = [
     `input=${fmt(usage.input_tokens ?? 0)}`,
     `output=${fmt(usage.output_tokens ?? 0)}`,
     ...(usage.cache_read_input_tokens ? [`cache_read=${fmt(usage.cache_read_input_tokens)}`] : []),
     ...(usage.cache_creation_input_tokens ? [`cache_write=${fmt(usage.cache_creation_input_tokens)}`] : []),
   ]
-  console.error(`[PROXY] ${requestId} usage: ${parts.join(" ")}`)
+  console.error(`[PROXY] ${requestId} usage: ${parts.join(" ")}${cacheTag}`)
+}
+
+function computeCacheHitRate(usage: TokenUsage | undefined): number | undefined {
+  if (!usage) return undefined
+  const read = usage.cache_read_input_tokens ?? 0
+  const creation = usage.cache_creation_input_tokens ?? 0
+  const uncached = usage.input_tokens ?? 0
+  // SDK reports input_tokens as only the non-cached portion.
+  // Total input = uncached + cache_read + cache_creation.
+  const total = uncached + read + creation
+  if (total === 0) return undefined
+  return read / total
+}
+
+function checkTokenHealth(
+  requestId: string,
+  sdkSessionId: string | undefined,
+  usage: TokenUsage | undefined,
+  turnNumber: number,
+  isResume: boolean,
+  isPassthrough: boolean
+): void {
+  if (!usage || !sdkSessionId) return
+
+  const cacheHitRate = computeCacheHitRate(usage) ?? 0
+  const current: TokenSnapshot = {
+    requestId,
+    turnNumber,
+    inputTokens: usage.input_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+    cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens ?? 0,
+    cacheHitRate,
+    isResume,
+    isPassthrough,
+  }
+
+  const prevMetric = telemetryStore.getLastForSession(sdkSessionId)
+  const previous: TokenSnapshot | undefined = prevMetric ? {
+    requestId: prevMetric.requestId,
+    turnNumber: turnNumber - 1,
+    inputTokens: prevMetric.inputTokens ?? 0,
+    outputTokens: prevMetric.outputTokens ?? 0,
+    cacheReadInputTokens: prevMetric.cacheReadInputTokens ?? 0,
+    cacheCreationInputTokens: prevMetric.cacheCreationInputTokens ?? 0,
+    cacheHitRate: prevMetric.cacheHitRate ?? 0,
+    isResume: prevMetric.isResume,
+    isPassthrough: prevMetric.isPassthrough,
+  } : undefined
+
+  const anomalies = detectTokenAnomalies(current, previous)
+  if (anomalies.length > 0) {
+    const alerts = formatAnomalyAlerts(requestId, anomalies)
+    for (const line of alerts) {
+      console.error(line)
+    }
+    for (const a of anomalies) {
+      diagnosticLog.log({
+        level: a.severity === "critical" ? "error" : "warn",
+        category: "token",
+        message: `${requestId} ${a.type}: ${a.detail}`,
+        requestId,
+      })
+    }
+  }
 }
 
 export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServer {
@@ -754,7 +824,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   for (const block of message.message.content) {
                     const b = block as unknown as Record<string, unknown>
                     // Strip thinking blocks — meaningless to non-native clients
-                    if (passthrough && (b.type === "thinking" || b.type === "redacted_thinking")) {
+                    if (passthrough && !adapter.supportsThinking?.() && (b.type === "thinking" || b.type === "redacted_thinking")) {
                       claudeLog("passthrough.thinking_stripped", { mode: "non_stream", type: b.type })
                       continue
                     }
@@ -856,6 +926,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           })
 
           const nonStreamQueueWaitMs = requestMeta.queueStartedAt - requestMeta.queueEnteredAt
+          checkTokenHealth(
+            requestMeta.requestId,
+            currentSessionId || resumeSessionId,
+            lastUsage,
+            allMessages.length,
+            isResume,
+            passthrough
+          )
           telemetryStore.record({
             requestId: requestMeta.requestId,
             timestamp: Date.now(),
@@ -877,6 +955,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             contentBlocks: contentBlocks.length,
             textEvents: 0,
             error: null,
+            inputTokens: lastUsage?.input_tokens,
+            outputTokens: lastUsage?.output_tokens,
+            cacheReadInputTokens: lastUsage?.cache_read_input_tokens,
+            cacheCreationInputTokens: lastUsage?.cache_creation_input_tokens,
+            cacheHitRate: computeCacheHitRate(lastUsage),
           })
 
           // Store session for future resume
@@ -1171,6 +1254,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                       // encrypted signature field.
                       if (
                         passthrough &&
+                        !adapter.supportsThinking?.() &&
                         (block?.type === "thinking" || block?.type === "redacted_thinking")
                       ) {
                         if (eventIndex !== undefined) skipBlockIndices.add(eventIndex)
@@ -1395,6 +1479,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 })
 
                 const streamQueueWaitMs = requestMeta.queueStartedAt - requestMeta.queueEnteredAt
+                checkTokenHealth(
+                  requestMeta.requestId,
+                  currentSessionId || resumeSessionId,
+                  lastUsage,
+                  allMessages.length,
+                  isResume,
+                  passthrough
+                )
                 telemetryStore.record({
                   requestId: requestMeta.requestId,
                   timestamp: Date.now(),
@@ -1416,6 +1508,11 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   contentBlocks: eventsForwarded,
                   textEvents: textEventsForwarded,
                   error: null,
+                  inputTokens: lastUsage?.input_tokens,
+                  outputTokens: lastUsage?.output_tokens,
+                  cacheReadInputTokens: lastUsage?.cache_read_input_tokens,
+                  cacheCreationInputTokens: lastUsage?.cache_creation_input_tokens,
+                  cacheHitRate: computeCacheHitRate(lastUsage),
                 })
 
                 if (textEventsForwarded === 0) {
