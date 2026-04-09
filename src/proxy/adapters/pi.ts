@@ -118,6 +118,13 @@ export const piAdapter: AgentAdapter = {
   },
 
   /**
+   * Pi can display thinking tokens — pass them through in passthrough mode.
+   */
+  supportsThinking(): boolean {
+    return true
+  },
+
+  /**
    * No PreToolUse hooks needed — pi handles its own tool execution.
    */
   buildSdkHooks(_body: any, _sdkAgents: Record<string, any>): undefined {
