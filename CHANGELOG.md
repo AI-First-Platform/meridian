@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.36.0](https://github.com/rynfar/meridian/compare/meridian-v1.35.0...meridian-v1.36.0) (2026-04-12)
+
+
+### Features
+
+* add optional API key authentication for network-exposed deployments ([19a1206](https://github.com/rynfar/meridian/commit/19a1206f1569630d3cc09f6145b4b2cff3065895))
+* per-adapter SDK feature toggles with settings UI ([#349](https://github.com/rynfar/meridian/issues/349)) ([0cdedb3](https://github.com/rynfar/meridian/commit/0cdedb350c076f118b49cf92faf1f5a7eca2a258))
+
+
+### Bug Fixes
+
+* forward accumulated usage on non-stream responses ([b5539d0](https://github.com/rynfar/meridian/commit/b5539d0798d86d2587b987448a56c1b595922cc6))
+* forward accumulated usage on non-stream responses ([5270ea2](https://github.com/rynfar/meridian/commit/5270ea2b750b949b93eb28d2a489c9c0ab85fadb))
+* handle all SDK stale session error variants ([4c19d48](https://github.com/rynfar/meridian/commit/4c19d488a42b430c104c01ee1308c4a54059c044)), closes [#333](https://github.com/rynfar/meridian/issues/333)
+
 ## [1.35.0](https://github.com/rynfar/meridian/compare/meridian-v1.34.1...meridian-v1.35.0) (2026-04-10)
 
 
