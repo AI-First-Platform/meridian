@@ -1023,7 +1023,14 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             content: contentBlocks,
             model: body.model,
             stop_reason: stopReason,
-            usage: { input_tokens: 0, output_tokens: 0 }
+            // Forward the usage accumulated from SDK assistant messages so
+            // clients calling `messages.create()` can track cost and rate limits.
+            usage: {
+              input_tokens: lastUsage?.input_tokens ?? 0,
+              output_tokens: lastUsage?.output_tokens ?? 0,
+              cache_read_input_tokens: lastUsage?.cache_read_input_tokens,
+              cache_creation_input_tokens: lastUsage?.cache_creation_input_tokens,
+            },
           }), {
             headers: {
               "Content-Type": "application/json",
