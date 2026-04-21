@@ -35,14 +35,23 @@ function safeCompare(a: string, b: string): boolean {
 
 /**
  * Extract the API key from the request.
- * Checks x-api-key header first, then Authorization: Bearer.
+ * Checks URL query params first, then x-api-key header, then Authorization: Bearer, then cookies.
  */
 function extractKey(c: Context): string | undefined {
+  const queryKey = c.req.query("api_key") || c.req.query("key") || c.req.query("apiKey")
+  if (queryKey) return queryKey
+
   const apiKey = c.req.header("x-api-key")
   if (apiKey) return apiKey
 
   const auth = c.req.header("authorization")
   if (auth?.startsWith("Bearer ")) return auth.slice(7)
+
+  const cookieHeader = c.req.header("cookie")
+  if (cookieHeader) {
+    const match = cookieHeader.match(/(?:^|;\s*)meridian_api_key=([^;]+)/)
+    if (match) return match[1]
+  }
 
   return undefined
 }

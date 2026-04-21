@@ -68,6 +68,13 @@ export const profileBarHtml = `
 
 export const profileBarJs = `
 (function() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const key = urlParams.get('key') || urlParams.get('api_key') || urlParams.get('apiKey');
+  if (key) {
+    document.cookie = "meridian_api_key=" + encodeURIComponent(key) + "; path=/; max-age=31536000";
+    localStorage.setItem("meridian_api_key", key);
+  }
+
   var profileBar = document.getElementById('meridianProfileBar');
   var profileSelect = document.getElementById('meridianProfileSelect');
   var profileType = document.getElementById('meridianProfileType');

@@ -146,13 +146,21 @@ export async function runCli(
 
   // Pre-flight auth check
   try {
-    const { stdout } = await runExec("claude auth status", { timeout: 5000 })
+    let stdout = ""
+    try {
+      const result = await runExec("claude auth status", { timeout: 5000 })
+      stdout = result.stdout
+    } catch (err: any) {
+      // claude auth status returns exit code 1 if not logged in
+      if (err.stdout) stdout = err.stdout;
+      else throw err;
+    }
     const auth = JSON.parse(stdout)
     if (!auth.loggedIn) {
       console.error("\x1b[31m✗ Not logged in to Claude.\x1b[0m Run: claude login")
       process.exit(1)
     }
-    if (auth.subscriptionType !== "max") {
+    if (auth.subscriptionType && auth.subscriptionType !== "max") {
       console.error(`\x1b[33m⚠ Claude subscription: ${auth.subscriptionType || "unknown"} (Max recommended)\x1b[0m`)
     }
   } catch {

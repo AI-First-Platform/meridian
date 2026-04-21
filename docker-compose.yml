@@ -11,7 +11,8 @@ services:
   proxy:
     build: .
     image: meridian
-    user: "claude"
+    env_file:
+      - .env
     depends_on:
       init:
         condition: service_completed_successfully

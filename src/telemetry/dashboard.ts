@@ -153,17 +153,19 @@ function setLogFilter(filter) {
 }
 
 async function refresh() {
+  const k = new URLSearchParams(location.search).get('key') || new URLSearchParams(location.search).get('api_key') || new URLSearchParams(location.search).get('apiKey') || '';
+  const kq = k ? '&key=' + k : '';
   const w = $('#window').value;
   try {
     const [summary, reqs, logs] = await Promise.all([
-      fetch('/telemetry/summary?window=' + w).then(r => r.json()),
-      fetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w))).then(r => r.json()),
-      fetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w))).then(r => r.json()),
+      fetch('/telemetry/summary?window=' + w + kq).then(r => r.json()),
+      fetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w)) + kq).then(r => r.json()),
+      fetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w)) + kq).then(r => r.json()),
     ]);
     render(summary, reqs, logs);
     $('#lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
-    $('#content').innerHTML = '<div class="empty">Failed to load telemetry</div>';
+    $('#content').innerHTML = '<div class="empty">Failed to load telemetry (Auth error or disconnected)</div>';
   }
 }
 
